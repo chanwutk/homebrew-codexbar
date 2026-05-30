@@ -1,0 +1,168 @@
+name: Update Formula
+
+run-name: Update ${{ inputs.formula }} for ${{ inputs.tag }}${{ inputs.request_id && format(' ({0})', inputs.request_id) || '' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      formula:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+      repository:
+        required: true
+        type: string
+      artifact_template:
+        required: false
+        type: string
+      target_aliases:
+        required: false
+        type: string
+      cask:
+        required: false
+        type: string
+      cask_artifact:
+        required: false
+        type: string
+      request_id:
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  update-codexbar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Download release assets and update tap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          SOURCE_REPO: ${{ inputs.repository }}
+          CASK_ARTIFACT: ${{ inputs.cask_artifact }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${TAG#v}"
+          tmp="$(mktemp -d)"
+          mkdir -p Casks Formula
+
+          app_zip="${CASK_ARTIFACT:-CodexBar-macos-universal-{version}.zip}"
+          app_zip="${app_zip//\{version\}/$version}"
+
+          assets=(
+            "$app_zip"
+            "CodexBarCLI-v${version}-macos-arm64.tar.gz"
+            "CodexBarCLI-v${version}-macos-x86_64.tar.gz"
+            "CodexBarCLI-v${version}-linux-aarch64.tar.gz"
+            "CodexBarCLI-v${version}-linux-x86_64.tar.gz"
+          )
+
+          for asset in "${assets[@]}"; do
+            gh release download "$TAG" --repo "$SOURCE_REPO" --pattern "$asset" --dir "$tmp"
+          done
+
+          sha() {
+            shasum -a 256 "$1" | awk '{print $1}'
+          }
+
+          app_sha="$(sha "$tmp/$app_zip")"
+          mac_arm_sha="$(sha "$tmp/CodexBarCLI-v${version}-macos-arm64.tar.gz")"
+          mac_x86_sha="$(sha "$tmp/CodexBarCLI-v${version}-macos-x86_64.tar.gz")"
+          linux_arm_sha="$(sha "$tmp/CodexBarCLI-v${version}-linux-aarch64.tar.gz")"
+          linux_x86_sha="$(sha "$tmp/CodexBarCLI-v${version}-linux-x86_64.tar.gz")"
+
+          cat > Casks/codexbar.rb <<EOF
+          cask "codexbar" do
+            version "$version"
+            sha256 "$app_sha"
+
+            url "https://github.com/chanwutk/CodexBar/releases/download/v#{version}/CodexBar-macos-universal-#{version}.zip",
+                verified: "github.com/chanwutk/CodexBar/"
+            name "CodexBar"
+            desc "Menu bar usage monitor for AI coding providers"
+            homepage "https://github.com/chanwutk/CodexBar"
+
+            depends_on macos: ">= :ventura"
+
+            app "CodexBar.app"
+            binary "#{appdir}/CodexBar.app/Contents/Helpers/CodexBarCLI", target: "codexbar"
+
+            zap trash: [
+              "~/Library/Application Scripts/com.chanwutk.codexbar",
+              "~/Library/Application Scripts/com.chanwutk.codexbar.widget",
+              "~/Library/Application Support/CodexBar",
+              "~/Library/Application Support/com.chanwutk.codexbar",
+              "~/Library/Caches/CodexBar",
+              "~/Library/Caches/com.chanwutk.codexbar",
+              "~/Library/Containers/com.chanwutk.codexbar",
+              "~/Library/Containers/com.chanwutk.codexbar.widget",
+              "~/Library/HTTPStorages/com.chanwutk.codexbar",
+              "~/Library/HTTPStorages/com.chanwutk.codexbar.binarycookies",
+              "~/Library/Preferences/com.chanwutk.codexbar.plist",
+              "~/Library/Saved Application State/com.chanwutk.codexbar.savedState",
+              "~/Library/WebKit/com.chanwutk.codexbar",
+            ]
+          end
+          EOF
+
+          cat > Formula/codexbar.rb <<EOF
+          class Codexbar < Formula
+            desc "Menu bar usage and status CLI"
+            homepage "https://github.com/chanwutk/CodexBar"
+            version "$version"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/chanwutk/CodexBar/releases/download/v#{version}/CodexBarCLI-v#{version}-macos-arm64.tar.gz"
+                sha256 "$mac_arm_sha"
+              else
+                url "https://github.com/chanwutk/CodexBar/releases/download/v#{version}/CodexBarCLI-v#{version}-macos-x86_64.tar.gz"
+                sha256 "$mac_x86_sha"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/chanwutk/CodexBar/releases/download/v#{version}/CodexBarCLI-v#{version}-linux-aarch64.tar.gz"
+                sha256 "$linux_arm_sha"
+              else
+                url "https://github.com/chanwutk/CodexBar/releases/download/v#{version}/CodexBarCLI-v#{version}-linux-x86_64.tar.gz"
+                sha256 "$linux_x86_sha"
+              end
+            end
+
+            def install
+              libexec.install "CodexBarCLI"
+              libexec.install "VERSION"
+              bin.write_exec_script libexec/"CodexBarCLI"
+              bin.install_symlink "CodexBarCLI" => "codexbar"
+            end
+
+            test do
+              assert_equal "CodexBar #{version}", shell_output("#{bin}/codexbar --version").strip
+            end
+          end
+          EOF
+
+      - name: Commit and push
+        run: |
+          git add Casks/codexbar.rb Formula/codexbar.rb
+          if git diff --cached --quiet; then
+            echo "Tap already up to date"
+            exit 0
+          fi
+          git commit -m "codexbar: update formula and cask for ${{ inputs.tag }}"
+          git push
