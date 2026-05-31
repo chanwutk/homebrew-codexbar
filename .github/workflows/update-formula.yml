@@ -99,6 +99,22 @@ jobs:
             app "CodexBar.app"
             binary "#{appdir}/CodexBar.app/Contents/Helpers/CodexBarCLI", target: "codexbar"
 
+            # This is an ad-hoc signed community build (not Apple-notarized), so macOS
+            # Gatekeeper would otherwise block first launch. Strip the quarantine flag
+            # that Homebrew applies to the downloaded app on install.
+            postflight do
+              system_command "/usr/bin/xattr",
+                             args: ["-dr", "com.apple.quarantine", "#{appdir}/CodexBar.app"],
+                             sudo: false
+            end
+
+            caveats <<~EOS
+              CodexBar is distributed as an ad-hoc signed build (no paid Apple Developer ID).
+              The install step removes the quarantine flag so it launches normally. If macOS
+              still blocks it, right-click the app and choose Open, or run:
+                xattr -dr com.apple.quarantine "/Applications/CodexBar.app"
+            EOS
+
             zap trash: [
               "~/Library/Application Scripts/com.chanwutk.codexbar",
               "~/Library/Application Scripts/com.chanwutk.codexbar.widget",
