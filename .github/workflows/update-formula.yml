@@ -69,8 +69,22 @@ jobs:
             "CodexBarCLI-v${version}-linux-x86_64.tar.gz"
           )
 
+          # Download from the public release URL with curl instead of cross-repo
+          # `gh release download`: this repo's GITHUB_TOKEN cannot reliably enumerate
+          # another repo's release assets. Retry to absorb asset-propagation lag.
+          base_url="https://github.com/${SOURCE_REPO}/releases/download/${TAG}"
           for asset in "${assets[@]}"; do
-            gh release download "$TAG" --repo "$SOURCE_REPO" --pattern "$asset" --dir "$tmp"
+            for attempt in {1..10}; do
+              if curl -fSL --retry 3 -o "$tmp/$asset" "${base_url}/${asset}"; then
+                break
+              fi
+              if [[ "$attempt" -eq 10 ]]; then
+                echo "Asset '$asset' never became available after ${attempt} attempts." >&2
+                exit 1
+              fi
+              echo "Asset '$asset' not available yet (attempt ${attempt}); retrying in 15s..." >&2
+              sleep 15
+            done
           done
 
           sha() {
