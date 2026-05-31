@@ -58,7 +58,13 @@ jobs:
           tmp="$(mktemp -d)"
           mkdir -p Casks Formula
 
-          app_zip="${CASK_ARTIFACT:-CodexBar-macos-universal-{version}.zip}"
+          # NOTE: do not inline the default as ${CASK_ARTIFACT:-...-{version}.zip} —
+          # the `}` inside `{version}` closes the parameter expansion early and appends
+          # a stray `.zip}` to the asset name.
+          app_zip="$CASK_ARTIFACT"
+          if [[ -z "$app_zip" ]]; then
+            app_zip="CodexBar-macos-universal-{version}.zip"
+          fi
           app_zip="${app_zip//\{version\}/$version}"
 
           assets=(
